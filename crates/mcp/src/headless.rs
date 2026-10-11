@@ -10,13 +10,6 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, ProgressHook};
 
-/// File extensions recognised as photos when expanding folders.
-pub const PHOTO_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "psd", "jxl",
-    "gif", "bmp", "avif", // containers LightCraft cannot decode but imports as preview only (their embedded JPEG)
-    "iiq", "crw", "mrw", "x3f", "kdc", "mos", "erf", "3fr", "fff",
-];
-
 /// Headless backend: a [`Session`] with filesystem hooks.
 pub struct Headless {
     pub session: Session,
@@ -174,16 +167,16 @@ impl Backend for Headless {
     }
 }
 
-/// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into photo files
-/// and make paths absolute.
+/// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into the files
+/// `library.import` takes (`lightcraft_engine::import::is_supported`) and make paths absolute.
 pub fn expand_paths(paths: &[String]) -> Vec<String> {
     let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
-    let photo = |p: &Path| p.extension().is_some_and(|e| PHOTO_EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()));
     let mut out = Vec::new();
     for p in paths {
         let path = Path::new(p);
         if path.is_dir() {
-            let w = lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), photo);
+            let w =
+                lightcraft_engine::walk::files_in(path, None, lightcraft_engine::walk::Limits::default(), lightcraft_engine::import::is_supported);
             out.extend(w.files.iter().map(|f| absolute(f)));
         } else {
             // Explicit files are kept even with unknown extensions (the probe decides).
@@ -211,6 +204,24 @@ pub fn write_image(path: &Path, img: &Rgba8, quality: u8) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--import <folder>` takes every extension `library.import` does, HEIC, HEIF and NRW included (issue #1080).
+    #[test]
+    fn expand_paths_takes_what_library_import_takes() {
+        let dir = std::env::temp_dir().join(format!("lc-mcp-expand-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for ext in lightcraft_engine::import::EXTENSIONS {
+            std::fs::write(dir.join(format!("a.{ext}")), b"").unwrap();
+        }
+        std::fs::write(dir.join("IMG_0682.HEIC"), b"").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+        let out = expand_paths(&[dir.to_string_lossy().to_string()]);
+        assert_eq!(out.len(), lightcraft_engine::import::EXTENSIONS.len() + 1, "{out:?}");
+        assert!(out.iter().any(|p| p.ends_with("IMG_0682.HEIC")), "{out:?}");
+        assert!(!out.iter().any(|p| p.ends_with("notes.txt")), "{out:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Headless sessions look for the SAM 3 model where the desktop app does, and `segment.model.status` reports it (issue #619).
     #[test]

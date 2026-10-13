@@ -167,8 +167,9 @@ impl Backend for Headless {
     }
 }
 
-/// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into the files
-/// `library.import` takes (`lightcraft_engine::import::is_supported`) and make paths absolute.
+/// Expand folders (recursively, sorted; bounded, see `lightcraft_engine::walk`) into photo files
+/// and make paths absolute. Folders take the extensions `library.import` takes
+/// (`lightcraft_engine::import::EXTENSIONS`), so the two can't drift apart (issue #1080).
 pub fn expand_paths(paths: &[String]) -> Vec<String> {
     let absolute = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
     let mut out = Vec::new();
@@ -184,29 +185,6 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
         }
     }
     out
-}
-
-#[cfg(test)]
-mod expand_tests {
-    use super::expand_paths;
-
-    #[test]
-    fn a_folder_import_includes_heic_heif_and_nrw() {
-        let dir = std::env::temp_dir().join(format!("lightcraft-ext-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for name in ["a.heic", "b.HEIF", "c.nrw", "d.png", "note.txt"] {
-            std::fs::write(dir.join(name), b"x").unwrap();
-        }
-        let got = expand_paths(&[dir.to_string_lossy().to_string()]);
-        let names: Vec<String> = got.iter().map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().to_lowercase()).collect();
-        assert!(names.contains(&"a.heic".into()), "{names:?}");
-        assert!(names.contains(&"b.heif".into()), "{names:?}");
-        assert!(names.contains(&"c.nrw".into()), "{names:?}");
-        assert!(names.contains(&"d.png".into()), "{names:?}");
-        assert!(!names.iter().any(|n| n == "note.txt"), "{names:?}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }
 
 /// Encode by extension: `.png` (default), `.jpg`/`.jpeg` (quality), `.tif`/`.tiff`, `.webp` (lossless),
@@ -228,24 +206,6 @@ pub fn write_image(path: &Path, img: &Rgba8, quality: u8) -> Result<(), String> 
 mod tests {
     use super::*;
 
-    /// `--import <folder>` takes every extension `library.import` does, HEIC, HEIF and NRW included (issue #1080).
-    #[test]
-    fn expand_paths_takes_what_library_import_takes() {
-        let dir = std::env::temp_dir().join(format!("lc-mcp-expand-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for ext in lightcraft_engine::import::EXTENSIONS {
-            std::fs::write(dir.join(format!("a.{ext}")), b"").unwrap();
-        }
-        std::fs::write(dir.join("IMG_0682.HEIC"), b"").unwrap();
-        std::fs::write(dir.join("notes.txt"), b"").unwrap();
-        let out = expand_paths(&[dir.to_string_lossy().to_string()]);
-        assert_eq!(out.len(), lightcraft_engine::import::EXTENSIONS.len() + 1, "{out:?}");
-        assert!(out.iter().any(|p| p.ends_with("IMG_0682.HEIC")), "{out:?}");
-        assert!(!out.iter().any(|p| p.ends_with("notes.txt")), "{out:?}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// Headless sessions look for the SAM 3 model where the desktop app does, and `segment.model.status` reports it (issue #619).
     #[test]
     fn headless_sessions_get_the_sam3_model_folder() {
@@ -258,6 +218,27 @@ mod tests {
         let mut h = Headless::new(session);
         let r = h.call("engine.execute", json!({"command": "segment.model.status", "params": {}})).unwrap();
         assert_eq!(r["dir"], json!(dir.display().to_string()), "{r}");
+    }
+
+    /// `--import <folder>` picks up every extension `library.import` takes, HEIC included (issue #1080).
+    #[test]
+    fn expand_paths_takes_the_engine_extensions() {
+        let dir = std::env::temp_dir().join(format!("lc-mcp-expand-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for e in lightcraft_engine::import::EXTENSIONS {
+            std::fs::write(dir.join(format!("a.{e}")), b"x").unwrap();
+        }
+        std::fs::write(dir.join("B.HEIC"), b"x").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        let found = expand_paths(&[dir.to_string_lossy().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let ext = |f: &String| Path::new(f).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+        let mut got: Vec<String> = found.iter().map(ext).collect();
+        got.sort();
+        let mut want: Vec<String> = lightcraft_engine::import::EXTENSIONS.iter().map(|e| e.to_string()).chain(["HEIC".to_string()]).collect();
+        want.sort();
+        assert_eq!(got, want);
     }
 
     /// A headless session stamps imports and edits with the system clock, not the engine's fixed test clock.

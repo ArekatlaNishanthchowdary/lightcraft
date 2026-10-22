@@ -2303,11 +2303,12 @@ fn photo_folder(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) ->
 }
 
 /// Whether Show in Folders has a row to show for photo `id` (the active one when `None`): its
-/// folder must be a row of the tree, which stops `MAX_DEPTH` levels down. With no fresh tree to
-/// look in, the folder alone decides, and the command still checks.
+/// folder must be a row of the tree, which stops `MAX_DEPTH` levels down. With no fresh tree cached
+/// (a read-only check cannot rebuild it), one is built to look in without being kept.
 pub fn show_in_folders_enabled(app: &LightcraftApp, id: Option<lightcraft_catalog::PhotoId>) -> bool {
     let Some(dir) = photo_folder(app, id) else { return false };
-    app.caches.folder_tree_if_fresh(&app.session.catalog).is_none_or(|tree| crate::panels::left::folder_row_of(&tree, &dir).is_some())
+    let tree = app.caches.folder_tree_if_fresh(&app.session.catalog).unwrap_or_else(|| std::sync::Arc::new(app.session.catalog.folder_tree()));
+    crate::panels::left::folder_row_of(&tree, &dir).is_some()
 }
 
 /// Photo ▸ Show in Folders (Lightroom's Go to Folder in Library): show the folder of photo `id`
